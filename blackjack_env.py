@@ -1,4 +1,5 @@
 import random
+import numpy as np
 
 class BlackjackEnv:
     def __init__(self, casino_type=1, cut_card_position=52):
@@ -132,6 +133,24 @@ class BlackjackEnv:
                 else:
                     return 10
             return 0
+
+    def _state_to_array(self, state):
+        # Transforma los estados del entorno a vectores, para poder usar directamente en pytorch
+        player_sum, dealer_upcard, usable_ace, num_cards, possible_blackjack = state
+
+        if isinstance(dealer_upcard, tuple):
+            dealer_upcard_value = self._card_value(dealer_upcard)
+        else:
+            dealer_upcard_value = dealer_upcard
+
+        # Normalización entre 0 - 1
+        return np.array([
+            player_sum / 21,
+            dealer_upcard_value / 10,
+            float(usable_ace),
+            num_cards / 10,
+            float(possible_blackjack)
+        ], dtype=np.float32)
 
     def reset(self):
         # Repartir cartas al jugador
