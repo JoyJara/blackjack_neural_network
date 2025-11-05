@@ -74,6 +74,10 @@ class BlackjackEnv:
             return next_state, reward, done, {}
         return None
 
+    def _is_blackjack(self, hand):
+        # Devuelve true si es un Blackjac natural (A + 10)
+        return len(hand) == 2 and sorted(hand) in([1, 10],[10, 1])
+
     def reset(self):
         # Repartir cartas al jugador
         self.player = [self._draw_card(), self._draw_card()]
@@ -101,20 +105,40 @@ class BlackjackEnv:
                 self.dealer_has_blackjack = True
                 self.done = True
 
-                # En caso de que el jugador también tenga blackjack entonces empate
-                if self._hand_value(self.player) == 21:
+                if self._is_blackjack(self.player):
                     self.player_has_blackjack = True
                     self.reward = 0
                 else:
                     self.reward = -1
-
-        # Si el dealer no tiene blackjack el juego continua
-        state = (player_sum, dealer_upcard, player_usable_ace, player_num_cards, possible_blackjack)
+                return(
+                    player_sum,
+                    dealer_upcard,
+                    player_usable_ace,
+                    player_num_cards,
+                    possible_blackjack
+                )
+        # Si el jugador tiene blackjack natural entonces
+        if self._is_blackjack(self.player):
+            self.player_has_blackjack = True
+            self.done = True
+            self.reward = 1.5
+            return(
+                player_sum,
+                dealer_upcard,
+                player_usable_ace,
+                player_num_cards,
+                possible_blackjack
+            )
+        # Ronda normal (sin blackjack)
+        state = (
+            player_sum,
+            dealer_upcard,
+            player_usable_ace,
+            player_num_cards,
+            possible_blackjack
+        )
         return state
 
-        # Crea y regresa el estado inicial
-        state = (player_sum, dealer_upcard, player_usable_ace, player_num_cards)
-        return state
 
     def step(self, action):
         # Pedir
