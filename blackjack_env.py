@@ -152,7 +152,11 @@ class BlackjackEnv:
             float(possible_blackjack)
         ], dtype=np.float32)
 
-    def reset(self):
+    def reset(self, force_new_shoe=False):
+        if len(self.shoe) <= self.cut_card_position or force_new_shoe:
+            self.shoe = self._init_shoe()
+            print("Carta de corte, nuevo zapato a continuación.")
+
         # Repartir cartas al jugador
         self.player = [self._draw_card(), self._draw_card()]
         # Repartir cartas al crupier
@@ -317,7 +321,16 @@ class BlackjackEnv:
 
                 return next_state, reward, done, {}
             else:
-                raise ValueError("Solo puedes doblar con las dos primeras cartas.")
+                # Aquí penaliza si intenta doblar con más de dos cartas
+                safe_state = (
+                    self._hand_value(self.player),
+                    self.dealer[0],
+                    self._usable_ace(self.player),
+                    len(self.player),
+                    int(self.dealer[0] in [1, 10])
+                )
+                print("Acción inválida, no puedes doblar con más de dos cartas.")
+                return safe_state, -1.0, True, {}
         # Rendirse
         elif action == 4:
             if len(self.player) == 2:
@@ -338,7 +351,16 @@ class BlackjackEnv:
 
                 return next_state, reward, done, {}
             else:
-                raise ValueError("Solo puedes rendirte con las primeras dos cartas.")
+                # Acción inválida: no puedes rendirte con más de dos cartas
+                safe_state = (
+                    self._hand_value(self.player),
+                    self.dealer[0],
+                    self._usable_ace(self.player),
+                    len(self.player),
+                    int(self.dealer[0] in [1, 10])
+                )
+                print("⚠️ Acción inválida: no puedes rendirte después de pedir carta.")
+                return safe_state, -1.0, True, {}
         # Dividir
         elif action == 3:
             if len(self.player) == 2 and self.player[0] == self.player[1]:
@@ -368,6 +390,16 @@ class BlackjackEnv:
                     raise ValueError("Ya no puedes dividir más.")
         else:
             raise ValueError("Acción inválida. (Plantarse = 0), (Pedir = 1), (Doblar = 2) ")
+        
+        # Si una acción del entorno no se puede ejecutar, entonces devuelve esto
+        safe_state = (
+            self._hand_value(self.player),
+            self.dealer[0],
+            self._usable_ace(self.player),
+            len(self.player),
+            int(self.dealer[0] in [1,10]),
+        )
+        return safe_state, 0, True, {}
 
     def render(self, reveal_dealer=False):
         if reveal_dealer or self.done:
