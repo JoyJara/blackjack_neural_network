@@ -1,22 +1,43 @@
 import random
 
 class BlackjackEnv:
-    def __init__(self):
+    def __init__(self, casino_type=1, cut_card_position=52):
+        self.casino_type = casino_type
+        self.cut_card_position = cut_card_position
         self.shoe = self._init_shoe()
 
     def _init_shoe(self):
-        shoe = [1,2,3,4,5,6,7,8,9,10,10,10,10] * 24
+        # Crea un zapato realista de 6 mazos (312 cartas)
+        valores = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+        palos = ["♠", "♥", "♦", "♣"]
+        shoe = []
+
+        for _ in range(6):  # 6 mazos
+            for valor in valores:
+                for palo in palos:
+                    shoe.append((valor, palo))
+
         random.shuffle(shoe)
         return shoe
 
     def _draw_card(self):
-        if len(self.shoe) == 0:
+        if len(self.shoe) <= self.cut_card_position:
+            print("Se llego al límite del zapato.")
             self.shoe = self._init_shoe()
         return self.shoe.pop()
 
+    def _card_value(self, card):
+        valor, palo = card
+        if valor == "A":
+            return 1
+        elif valor in ["J", "Q", "K"]:
+            return 10
+        else:
+            return int(valor)
+
     def _hand_value(self, hand):
-        total = sum(hand)
-        aces = hand.count(1)
+        total = sum(self._card_value(c) for c in hand)
+        aces = sum(1 for c in hand if c[0] == "A")
 
         while aces > 0 and total + 10 <= 21:
             total += 10
@@ -24,7 +45,8 @@ class BlackjackEnv:
         return total
     
     def _usable_ace(self, hand):
-        total = sum(hand)
+        total = sum(self._card_value(c) for c in hand)
+        has_ace = any(c[0] == "A" for c in hand)
         return int(1 in hand and total + 10 <= 21)
 
     def _handle_next_hand(self, reward, done):
@@ -63,6 +85,7 @@ class BlackjackEnv:
                     total_reward += -1
 
             reward = total_reward / len(self.hands)
+
             done = True
             next_state = (
                 self._hand_value(self.player),
@@ -71,12 +94,44 @@ class BlackjackEnv:
                 len(self.player),
                 int(self.dealer[0] in [1, 10])
             )
+
+            if hasattr(self, "side_bet_reward"):
+                reward += self.side_bet_reward
+                self.side_bet_reward = 0
+
             return next_state, reward, done, {}
         return None
 
     def _is_blackjack(self, hand):
-        # Devuelve true si es un Blackjac natural (A + 10)
-        return len(hand) == 2 and sorted(hand) in([1, 10],[10, 1])
+        # Devuelve true si es un Blackjack natural (A + 10) o (10 + A)
+        if len(hand) != 2:
+            return False
+        v1 = self._card_value(hand[0])
+        v2 = self._card_value(hand[1])
+        return (v1 == 1 and v2 == 10) or (v2 == 1 and v1 == 10)
+
+    def _calculate_side_bet(self, hand):
+        card_1, card_2 = hand[0], hand[1]
+
+        # Casino 1 (Macao)
+        if self.casino_type == 1:
+            total = self._card_value(card_1) + self._card_value(card_2)
+            if total == 13:
+                return 10
+            elif total < 13 or total > 13:
+                return 1
+            else:
+                return 0
+        # Casino 2 (Jubilee)
+        elif self.casino_type == 2:
+            v1, s1 = card_1
+            v2, s2 = card_2
+            if v1 == v2:
+                if s1 == s2:
+                    return 15   # Par perfecto
+                else:
+                    return 10
+            return 0
 
     def reset(self):
         # Repartir cartas al jugador
@@ -98,6 +153,7 @@ class BlackjackEnv:
         self.current_hand_index = 0
         self.split_count = 0
         self.max_splits = 4
+        self.side_bet_reward = self._calculate_side_bet(self.player)
 
         # Checa si el dealer tiene blackjack [A,10]
         if dealer_upcard in [1, 10]:
@@ -164,6 +220,7 @@ class BlackjackEnv:
             result = self._handle_next_hand(reward, done)
             if result:
                 return result
+
             return next_state, reward, done, {}
         # Plantarse
         elif action == 0:
@@ -176,7 +233,7 @@ class BlackjackEnv:
 
             if dealer_sum > 21 or player_sum > dealer_sum:
                 reward = 1      # Gana el jugador
-            elif player_sum == player_sum:
+            elif player_sum == dealer_sum:
                 reward = 0      # Empate
             else:
                 reward = -1     # Pierde el jugador
@@ -193,6 +250,7 @@ class BlackjackEnv:
             result = self._handle_next_hand(reward, done)
             if result:
                 return result
+
             return next_state, reward, done, {}
         # Doblar
         elif action == 2:
@@ -237,6 +295,7 @@ class BlackjackEnv:
                 result = self._handle_next_hand(reward, done)
                 if result:
                     return result
+
                 return next_state, reward, done, {}
             else:
                 raise ValueError("Solo puedes doblar con las dos primeras cartas.")
@@ -257,6 +316,7 @@ class BlackjackEnv:
                 result = self._handle_next_hand(reward, done)
                 if result:
                     return result
+
                 return next_state, reward, done, {}
             else:
                 raise ValueError("Solo puedes rendirte con las primeras dos cartas.")
@@ -291,23 +351,40 @@ class BlackjackEnv:
             raise ValueError("Acción inválida. (Plantarse = 0), (Pedir = 1), (Doblar = 2) ")
 
     def render(self, reveal_dealer=False):
-        if reveal_dealer:
+        if reveal_dealer or self.done:
             print(f"\nDealer: {self.dealer} (suma: {self._hand_value(self.dealer)})")
         else:
             print(f"\nDealer: [{self.dealer[0]}, ?]")
 
         print(f"\nJugador: {self.player} (suma: {self._hand_value(self.player)})")    
 
-        if reveal_dealer:
+        # Mostrar si hay varias manos
+        if hasattr(self, "hands") and len(self.hands) > 1:
+            print(f"Mano {self.current_hand_index + 1} de {len(self.hands)}")
+
+        # Mostrar el número de divisiones realizadas
+        if hasattr(self, "split_count") and self.split_count > 0:
+            print(f"Divisiones realizadas: {self.split_count}")
+
+        if self.dealer_has_blackjack and self.player_has_blackjack:
+            print("Ambos tienen Blackjack. Empate.")
+        elif self.dealer_has_blackjack:
+            print("El dealer tiene Blackjack. Suerte en la próxima.")
+        elif self.player_has_blackjack:
+            print("Blackjack paga 3:2. ¡Felicidades!")    
+
+        if reveal_dealer or self.done:
             player_val = self._hand_value(self.player)
             dealer_val = self._hand_value(self.dealer)
-            if player_val > 21:
-                print("\nDemasiadas cartas. El dealer gana.")
-            elif dealer_val > 21:
-                print("\n¡Buster! El jugador gana.")
-            elif player_val > dealer_val:
-                print("\n¡Felicidades! El jugador gana.")
-            elif player_val == dealer_val:
-                print("\nEmpate.")
-            else:
-                print("\nEl dealer gana. Suerte para la próxima.")
+            if not (self.dealer_has_blackjack or self.player_has_blackjack):
+                if player_val > 21:
+                    print("\nDemasiadas cartas. El dealer gana.")
+                elif dealer_val > 21:
+                    print("\n¡Buster! El jugador gana.")
+                elif player_val > dealer_val:
+                    print("\n¡Felicidades! El jugador gana.")
+                elif player_val == dealer_val:
+                    print("\nEmpate.")
+                else:
+                    print("\nEl dealer gana. Suerte para la próxima.")
+            print(f"Recompensa final: {self.reward}")
