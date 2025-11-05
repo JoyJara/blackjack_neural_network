@@ -10,8 +10,8 @@ while not done:
         print("El dealer tiene blackjack.")
         done = True
     else:
-        action = int(input("¿Que deseas hacer? (Plantar = 0), (Pedir = 1), (Doblar = 2), (Dividir = 3), (Rendirse = 4): "))
+        action = int(input("\n¿Que deseas hacer? (Plantar = 0), (Pedir = 1), (Doblar = 2), (Dividir = 3), (Rendirse = 4): "))
         state, reward, done, info = env.step(action)
 
 env.render(reveal_dealer=True)
-print(f"Recompensa final: {reward}")
+print(f"\nRecompensa final: {reward}")

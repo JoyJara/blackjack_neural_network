@@ -27,6 +27,53 @@ class BlackjackEnv:
         total = sum(hand)
         return int(1 in hand and total + 10 <= 21)
 
+    def _handle_next_hand(self, reward, done):
+        if done and hasattr(self, "hands") and len(self.hands) > 1:
+            self.current_hand_index +=1
+
+            # Checa faltan manos por jugar
+            if self.current_hand_index < len(self.hands):
+                self.player = self.hands[self.current_hand_index]
+                done = False
+                reward = 0
+                next_state = (
+                    self._hand_value(self.player),
+                    self.dealer[0],
+                    self._usable_ace(self.player),
+                    len(self.player),
+                    int(self.dealer[0] in [1, 10])
+                )
+                return next_state, reward, done, {}
+
+            # Si ya se jugaron todas las manos del jugador, continua el dealer
+            while self._hand_value(self.dealer) < 17:
+                self.dealer.append(self._draw_card())
+
+            total_reward = 0
+            for hand in self.hands:
+                player_sum = self._hand_value(hand)
+                dealer_sum = self._hand_value(self.dealer)
+                if player_sum > 21:
+                    total_reward += -1
+                elif dealer_sum > 21 or player_sum > dealer_sum:
+                    total_reward += 1
+                elif player_sum == dealer_sum:
+                    total_reward += 0
+                else:
+                    total_reward += -1
+
+            reward = total_reward / len(self.hands)
+            done = True
+            next_state = (
+                self._hand_value(self.player),
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self.dealer[0] in [1, 10])
+            )
+            return next_state, reward, done, {}
+        return None
+
     def reset(self):
         # Repartir cartas al jugador
         self.player = [self._draw_card(), self._draw_card()]
@@ -82,7 +129,17 @@ class BlackjackEnv:
                 reward = 0
                 done = False
             
-            next_state = (player_sum, self.dealer[0], self._usable_ace(self.player), len(self.player))
+            next_state = (
+                player_sum,
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self.dealer[0] in [1, 10])
+            )
+            
+            result = self._handle_next_hand(reward, done)
+            if result:
+                return result
             return next_state, reward, done, {}
         # Plantarse
         elif action == 0:
@@ -101,7 +158,17 @@ class BlackjackEnv:
                 reward = -1     # Pierde el jugador
             
             done = True
-            next_state = (player_sum, self.dealer[0], self._usable_ace(self.player), len(self.player))
+            next_state = (
+                player_sum,
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self.dealer[0] in [1, 10])
+            )
+
+            result = self._handle_next_hand(reward, done)
+            if result:
+                return result
             return next_state, reward, done, {}
         # Doblar
         elif action == 2:
@@ -113,30 +180,59 @@ class BlackjackEnv:
                     reward = -2
                     done = True
                 else:
-                    while self._hand_value(self.dealer) < 17:
-                        self.dealer.append(self._draw_card())
-
-                    dealer_sum = self._hand_value(self.dealer)
-                    if dealer_sum > 21 or player_sum > dealer_sum:
-                        reward = 2
-                    elif player_sum == dealer_sum:
-                        reward = 0
+                    # El dealer no juega si todavía hay manos jugables (por haber dividido)
+                    # Si, sí es la última mano disponible, el dealer juega
+                    if (
+                        not hasattr(self, "hands")
+                        or len(self.hands) == 1
+                        or self.current_hand_index == len(self.hands) -1
+                    ):
+                        while self._hand_value(self.dealer) < 17:
+                            self.dealer.append(self._draw_card())
+                        
+                        dealer_sum = self._hand_value(self.dealer)
+                        if dealer_sum > 21 or player_sum > dealer_sum:
+                            reward = 2
+                        elif player_sum == dealer_sum:
+                            reward = 0
+                        else:
+                            reward = - 2
                     else:
-                        reward -2
+                        reward = 0
+
                     done = True
 
-                next_state = (player_sum, self.dealer[0], self._usable_ace(self.player), len(self.player), int(self.dealer[0] in [1, 10]))
+                next_state = (
+                    player_sum,
+                    self.dealer[0],
+                    self._usable_ace(self.player),
+                    len(self.player),
+                    int(self.dealer[0] in [1, 10])
+                )
+                
+                result = self._handle_next_hand(reward, done)
+                if result:
+                    return result
                 return next_state, reward, done, {}
             else:
                 raise ValueError("Solo puedes doblar con las dos primeras cartas.")
         # Rendirse
         elif action == 4:
             if len(self.player) == 2:
+                player_sum = self._hand_value(self.player)
                 reward = -0.5
                 done = True
-                next_state = (self._hand_value(self.player), self.dealer[0],
-                      self._usable_ace(self.player), len(self.player),
-                      int(self.dealer[0] in [1, 10]))
+                next_state = (
+                    player_sum,
+                    self.dealer[0],
+                    self._usable_ace(self.player),
+                    len(self.player),
+                    int(self.dealer[0] in [1, 10])
+                )
+                
+                result = self._handle_next_hand(reward, done)
+                if result:
+                    return result
                 return next_state, reward, done, {}
             else:
                 raise ValueError("Solo puedes rendirte con las primeras dos cartas.")
@@ -172,22 +268,22 @@ class BlackjackEnv:
 
     def render(self, reveal_dealer=False):
         if reveal_dealer:
-            print(f"Dealer: {self.dealer} (suma: {self._hand_value(self.dealer)})")
+            print(f"\nDealer: {self.dealer} (suma: {self._hand_value(self.dealer)})")
         else:
-            print(f"Dealer: [{self.dealer[0]}, ?]")
+            print(f"\nDealer: [{self.dealer[0]}, ?]")
 
-        print(f"Jugador: {self.player} (suma: {self._hand_value(self.player)})")    
+        print(f"\nJugador: {self.player} (suma: {self._hand_value(self.player)})")    
 
         if reveal_dealer:
             player_val = self._hand_value(self.player)
             dealer_val = self._hand_value(self.dealer)
             if player_val > 21:
-                print("Demasiadas cartas. El dealer gana.")
+                print("\nDemasiadas cartas. El dealer gana.")
             elif dealer_val > 21:
-                print("¡Buster! El jugador gana.")
+                print("\n¡Buster! El jugador gana.")
             elif player_val > dealer_val:
-                print("¡Felicidades! El jugador gana.")
+                print("\n¡Felicidades! El jugador gana.")
             elif player_val == dealer_val:
-                print("Empate.")
+                print("\nEmpate.")
             else:
-                print("El dealer gana. Suerte para la próxima.")
+                print("\nEl dealer gana. Suerte para la próxima.")
