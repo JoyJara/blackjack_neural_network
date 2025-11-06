@@ -6,7 +6,7 @@ from dqn_neuraljack import DQN
 env = BlackjackEnv(casino_type=1)
 state = env._state_to_array(env.reset())
 state_dim = len(state)
-n_actions = 5
+n_actions = 2
 
 model = DQN(state_dim, n_actions)
 model.load_state_dict(torch.load("dqn_blackjack.pth"))
@@ -26,7 +26,7 @@ while True:
     state = env._state_to_array(next_state_raw)
 
     # Pausa de 1 segundo entre jugadas (como un humano)
-    time.sleep(1.0)
+    time.sleep(2.0)
 
     if done:
         print("\n--- Ronda terminada ---")

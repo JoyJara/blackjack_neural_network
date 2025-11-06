@@ -220,6 +220,17 @@ class BlackjackEnv:
 
 
     def step(self, action):
+        # Limitación temporal para que la red se entrene primero con las dos acciones básicas
+        if action not in [0, 1]:
+            safe_state = (
+                self._hand_value(self.player),
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self.dealer[0] in [1, 10])
+            )
+            # Penalización leve para evitar errores
+            return safe_state, -0.2, False, {}          
         # Pedir
         if action == 1:
             self.player.append(self._draw_card())
@@ -359,7 +370,7 @@ class BlackjackEnv:
                     len(self.player),
                     int(self.dealer[0] in [1, 10])
                 )
-                print("⚠️ Acción inválida: no puedes rendirte después de pedir carta.")
+                print("Acción inválida: no puedes rendirte después de pedir carta.")
                 return safe_state, -1.0, True, {}
         # Dividir
         elif action == 3:

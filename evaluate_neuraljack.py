@@ -13,7 +13,7 @@ env = BlackjackEnv(casino_type=CASINO_TYPE)
 state = env._state_to_array(env.reset())
 
 state_dim = len(state)
-n_actions = 5
+n_actions = 2
 
 model = DQN(state_dim, n_actions)
 model.load_state_dict(torch.load(MODEL_PATH))
@@ -54,7 +54,7 @@ push_rate = pushes / EPISODES
 loss_rate = losses / EPISODES
 avg_reward = total_reward / EPISODES
 
-print("\n🎯 RESULTADOS DEL AGENTE 🎯")
+print("\nRESULTADOS DEL AGENTE")
 print(f"Episodios evaluados: {EPISODES}")
 print(f"Win rate:   {win_rate:.2%}")
 print(f"Push rate:  {push_rate:.2%}")

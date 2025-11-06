@@ -17,7 +17,7 @@ avg_rewards = []
 env = BlackjackEnv(casino_type=1)
 state = env._state_to_array(env.reset(force_new_shoe=False))
 state_dim = len(state)
-n_actions = 5
+n_actions = 2
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
