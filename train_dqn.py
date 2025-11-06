@@ -25,20 +25,20 @@ model = DQN(state_dim, n_actions).to(device)
 target_model = DQN(state_dim, n_actions).to(device)
 target_model.load_state_dict(model.state_dict())
 
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.0005)
 criterion = nn.MSELoss()
 
 buffer = ReplayBuffer(capacity=100000)
 
 epsilon = 1.0        # exploración inicial
 epsilon_min = 0.05
-epsilon_decay = 0.995
+epsilon_decay = 0.999
 
 gamma = 0.99          # descuento futuro
 batch_size = 128
 target_update = 1000   # cada 100 episodios actualiza la red objetivo
 
-episodes = 1000000
+episodes = 500000
 rewards_log = []
 epsilons = []
 ax2 = ax.twinx()

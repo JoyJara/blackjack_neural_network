@@ -26,9 +26,9 @@ while True:
     state = env._state_to_array(next_state_raw)
 
     # Pausa de 1 segundo entre jugadas (como un humano)
-    time.sleep(2.0)
+    time.sleep(3.0)
 
     if done:
         print("\n--- Ronda terminada ---")
-        time.sleep(2.0)
+        time.sleep(4.0)
         state = env._state_to_array(env.reset())
