@@ -5,8 +5,12 @@ from dqn_neuraljack import DQN
 
 # --- Configuración ---
 EPISODES = 100000          # número de manos para evaluar
-CASINO_TYPE = 1           # 1 o 2 según el entorno que quieras probar
+CASINO_TYPE = 1            # 1 o 2 según el entorno que quieras probar
 MODEL_PATH = "dqn_blackjack.pth"
+
+# --- Configurar dispositivo (forzar CPU) ---
+device = torch.device("cpu")
+print("Usando dispositivo:", device)
 
 # --- Inicializar entorno y modelo ---
 env = BlackjackEnv(casino_type=CASINO_TYPE)
@@ -15,8 +19,8 @@ state = env._state_to_array(env.reset())
 state_dim = len(state)
 n_actions = 2
 
-model = DQN(state_dim, n_actions)
-model.load_state_dict(torch.load(MODEL_PATH))
+model = DQN(state_dim, n_actions).to(device)
+model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.eval()
 
 # --- Métricas ---
@@ -31,7 +35,7 @@ for episode in range(EPISODES):
     done = False
 
     while not done:
-        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)
         with torch.no_grad():
             q_values = model(state_tensor)
             action = torch.argmax(q_values).item()
