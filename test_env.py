@@ -1,51 +1,68 @@
+import sys
 from blackjack_env_1 import BlackjackEnv
 
-def jugar_una_ronda(env):
-    state = env.reset()
-    done = False
-
-    print("\n===== NUEVA RONDA =====\n")
-
-    while not done:
-
-        # Render del estado actual
-        env.render()
-
-        # Si el dealer ya tiene blackjack, terminamos
-        if env.done and (env.reward in [-1, 0]):
-            break
-
+def pedir_accion():
+    while True:
         try:
-            action = int(input(
+            accion = int(input(
                 "\n¿Qué deseas hacer? "
-                "(Plantar = 0), (Pedir = 1), (Doblar = 2), (Dividir = 3), (Rendirse = 4): "
+                "(Plantar = 0), (Pedir = 1), (Doblar = 2), "
+                "(Dividir = 3), (Rendirse = 4): "
             ))
+            if accion in [0, 1, 2, 3, 4]:
+                return accion
+            print("Acción inválida. Ingresa un número entre 0 y 4.")
         except ValueError:
-            print("Entrada inválida. Ingresa un número entre 0 y 4.")
-            continue
+            print("Entrada inválida, solo números enteros.")
 
-        # Acción del jugador
-        try:
-            state, reward, done, info = env.step(action)
-        except Exception as e:
-            print(f"Error al procesar la acción: {e}")
-            continue
-
-    # Mostrar resultado final mostrando todas las cartas
-    print("\n===== RESULTADO FINAL =====")
-    env.render(reveal_dealer=True)
-    print(f"\nRecompensa final (env.reward): {env.reward}")
-    print("===========================\n")
 
 def main():
-    env = BlackjackEnv(casino_type=1)
+    print("=== TEST DEL ENTORNO DE BLACKJACK ===\n")
+
+    env = BlackjackEnv(training_mode=False, verbose=True)
 
     while True:
-        jugar_una_ronda(env)
-        again = input("¿Quieres jugar otra ronda? (s/n): ").strip().lower()
-        if again != "s":
-            print("Saliendo del juego. ¡Gracias por jugar!")
+        print("\n===========================\n")
+        print("===== NUEVA RONDA =====\n")
+
+        state = env.reset()
+        env.render()
+
+        # BUCLE PRINCIPAL DE LA RONDA
+        while True:
+
+            # 🚫 La ronda terminó (blackjack natural, dealer, bust etc.)
+            if env.done:
+                break
+
+            # 🚫 La mano actual terminó (por blackjack natural, doblar, bust, etc.)
+            hand = env.hands[env.current]
+            if hand.done:
+                break
+
+            # Obtener acción del usuario
+            action = pedir_accion()
+
+            # Ejecutar acción
+            state, reward, done, info = env.step(action)
+
+            # Render
+            env.render()
+
+            # Si el entorno reporta "done"
+            if done:
+                break
+
+        print("\n===========================")
+        print(f"Recompensa final: {env.reward}")
+        print("===========================\n")
+
+        # Preguntar si quiere jugar otra
+        otra = input("¿Quieres jugar otra ronda? (s/n): ").strip().lower()
+        if otra != "s":
+            print("\nGracias por jugar. ¡Hasta luego!")
             break
+
 
 if __name__ == "__main__":
     main()

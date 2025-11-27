@@ -3,234 +3,235 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import random
-
+from collections import deque
 from blackjack_env import BlackjackEnv
-from dqn_neuraljack import DQN
-from replay_buffer import ReplayBuffer
-from tqdm import trange
+import os
 
-import matplotlib.pyplot as plt
-from datetime import datetime  # para el nombre de los modelos
 
-# ===================== #
-#   CONFIGURACIÓN BASE  #
-# ===================== #
+# ============================================================
+#                 RED NEURONAL (DQN)
+# ============================================================
+class DQN(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(DQN, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim)
+        )
 
-SEED = 42
+    def forward(self, x):
+        return self.model(x)
 
-# False -> solo 2 acciones (plantarse, pedir)
-# True  -> 5 acciones (plantarse, pedir, doblar, dividir, rendirse)
-USE_ALL_ACTIONS = False
 
-# Semillas para reproducibilidad
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(SEED)
-
-# Detección de dispositivo
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    device = torch.device("mps")  # para Macs con Apple Silicon
-else:
-    device = torch.device("cpu")
-
-print(f"Usando dispositivo: {device}")
-
-# ===================== #
-#   FUNCIÓN EVALUACIÓN  #
-# ===================== #
-
-def evaluate_policy(env, model, device, episodes_eval=10000):
+# ============================================================
+#                 FUNCIÓN PARA FILTRAR ACCIONES
+# ============================================================
+def filtrar_acciones_invalidas(env, q_values):
     """
-    Evalúa la política actual sin exploración (acción greedy)
-    y muestra win rate, loss rate, push rate y recompensa promedio.
-    """
-    model.eval()
-    wins = 0
-    losses = 0
-    pushes = 0
-    total_rewards = 0.0
+    Filtra acciones inválidas durante la fase 2 avanzada.
 
-    for _ in range(episodes_eval):
-        state = env._state_to_array(env.reset())
+    NOTE:
+    - Solo para fase 2.
+    - Solo se usa cuando env.training_mode=True.
+    - Si la acción es inválida, se pone en -inf para evitar que el DQN la elija.
+    """
+
+    hand = env.hands[env.current]
+    validas = [True] * 5  # acciones [0,1,2,3,4]
+
+    # Solo puedes doblar si hay exactamente 2 cartas
+    if len(hand.cards) != 2 or hand.is_ace_split:
+        validas[2] = False
+
+    # Solo puedes dividir si las cartas tienen mismo valor y son exactamente 2
+    if len(hand.cards) != 2:
+        validas[3] = False
+    else:
+        c1, c2 = hand.cards
+        if env._card_value(c1) != env._card_value(c2):
+            validas[3] = False
+
+    # Rendirse solo con 2 cartas
+    if len(hand.cards) != 2:
+        validas[4] = False
+
+    # Split máximo
+    if len(env.hands) >= env.max_splits + 1:
+        validas[3] = False
+
+    # Aplicar máscara
+    for i, v in enumerate(validas):
+        if not v:
+            q_values[0][i] = -1e9
+
+    return q_values
+
+
+# ============================================================
+#                 FUNCIÓN DE ENTRENAMIENTO (GENÉRICA)
+# ============================================================
+def entrenar_fase(
+    nombre_fase,
+    num_episodios,
+    acciones_disponibles,
+    usar_filtro_acciones,
+    modelo,
+    dispositivo,
+    archivo_guardado,
+    archivo_inicial=None,
+):
+    """
+    Entrena una fase (fase 1 o fase 2).
+    """
+
+    print(f"\n==============================")
+    print(f"   INICIANDO {nombre_fase}")
+    print(f"==============================\n")
+
+    # Configurar entorno
+    env = BlackjackEnv(training_mode=True, verbose=False)
+
+    # Dimensión del estado
+    estado = env.reset()
+    estado_dim = len(estado)
+
+    # Crear modelo si es fase 1
+    if archivo_inicial is not None:
+        print(f"Cargando modelo de fase previa: {archivo_inicial}")
+        modelo.load_state_dict(torch.load(archivo_inicial))
+
+    optimizer = optim.Adam(modelo.parameters(), lr=0.0003)
+    criterio = nn.MSELoss()
+
+    memoria = deque(maxlen=50000)
+    batch_size = 64
+    gamma = 0.99
+
+    epsilon = 1.0
+    epsilon_min = 0.1
+    epsilon_decay = 0.9995
+
+    for episodio in range(1, num_episodios + 1):
+
+        estado = env.reset()
+        estado = np.array(estado, dtype=np.float32)
         done = False
-        ep_reward = 0.0
+
+        total_reward_epi = 0
 
         while not done:
-            state_tensor = torch.tensor(
-                state, dtype=torch.float32, device=device
-            ).unsqueeze(0)
+            estado_tensor = torch.tensor(estado, dtype=torch.float32).to(dispositivo).unsqueeze(0)
 
-            with torch.no_grad():
-                q_values = model(state_tensor)
-                action = torch.argmax(q_values, dim=1).item()
+            # -------------------------------
+            #   EPSILON-GREEDY ACTION
+            # -------------------------------
+            if random.random() < epsilon:
+                accion = random.choice(acciones_disponibles)
+            else:
+                q_values = modelo(estado_tensor)
 
-            next_state_raw, reward, done, _ = env.step(action)
-            state = env._state_to_array(next_state_raw)
-            ep_reward += reward
+                if usar_filtro_acciones:
+                    q_values = filtrar_acciones_invalidas(env, q_values)
 
-        total_rewards += ep_reward
+                accion = int(torch.argmax(q_values).item())
 
-        if ep_reward > 0:
-            wins += 1
-        elif ep_reward < 0:
-            losses += 1
-        else:
-            pushes += 1
+            # -------------------------------
+            #     STEP DEL ENTORNO
+            # -------------------------------
+            siguiente_estado, recompensa, done, info = env.step(accion)
+            siguiente_estado = np.array(siguiente_estado, dtype=np.float32)
 
-    win_rate = wins / episodes_eval * 100.0
-    loss_rate = losses / episodes_eval * 100.0
-    push_rate = pushes / episodes_eval * 100.0
-    avg_reward = total_rewards / episodes_eval
+            total_reward_epi += recompensa
 
-    print("\n----- Evaluación de la política (greedy, sin exploración) -----")
-    print(f"Episodios de evaluación: {episodes_eval}")
-    print(f"Win rate  : {win_rate:.2f}%")
-    print(f"Loss rate : {loss_rate:.2f}%")
-    print(f"Push rate : {push_rate:.2f}%")
-    print(f"Reward promedio por episodio: {avg_reward:.4f}")
-    print("--------------------------------------------------------------\n")
+            # Guardar transición
+            memoria.append((estado, accion, recompensa, siguiente_estado, done))
 
-# ===================== #
-#      ENTORNO DQN      #
-# ===================== #
+            estado = siguiente_estado
 
-plt.ion()
-fig, ax = plt.subplots()
-avg_rewards = []
+            # -------------------------------
+            #   ENTRENAMIENTO DEL DQN
+            # -------------------------------
+            if len(memoria) > batch_size:
+                lote = random.sample(memoria, batch_size)
 
-env = BlackjackEnv(casino_type=1)
+                estados_batch = torch.tensor([x[0] for x in lote], dtype=torch.float32).to(dispositivo)
+                acciones_batch = torch.tensor([x[1] for x in lote]).long().to(dispositivo)
+                recompensas_batch = torch.tensor([x[2] for x in lote], dtype=torch.float32).to(dispositivo)
+                sig_estados_batch = torch.tensor([x[3] for x in lote], dtype=torch.float32).to(dispositivo)
+                dones_batch = torch.tensor([x[4] for x in lote], dtype=torch.float32).to(dispositivo)
 
-# Estado inicial para saber la dimensión de entrada
-state = env._state_to_array(env.reset(force_new_shoe=False))
-state_dim = len(state)
+                q_valores = modelo(estados_batch).gather(1, acciones_batch.unsqueeze(1)).squeeze(1)
+                q_siguientes = modelo(sig_estados_batch).max(1)[0].detach()
 
-# Acciones: por ahora 2 (hit/stand). Más adelante puedes cambiar a 5.
-n_actions = 5 if USE_ALL_ACTIONS else 2
+                objetivo = recompensas_batch + gamma * q_siguientes * (1 - dones_batch)
 
-# Redes Q
-model = DQN(state_dim, n_actions).to(device)
-target_model = DQN(state_dim, n_actions).to(device)
-target_model.load_state_dict(model.state_dict())
-target_model.eval()  # la red objetivo no se entrena directamente
+                loss = criterio(q_valores, objetivo)
 
-optimizer = optim.Adam(model.parameters(), lr=5e-4)
-criterion = nn.MSELoss()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-buffer = ReplayBuffer(capacity=100_000)
+        # Reducción de epsilon
+        if epsilon > epsilon_min:
+            epsilon *= epsilon_decay
 
-# Hiperparámetros de RL
-epsilon = 1.0          # exploración inicial
-epsilon_min = 0.05
-epsilon_decay = 0.999
+        # Logs
+        if episodio % 5000 == 0:
+            print(f"Episodio {episodio}/{num_episodios}  |  Reward: {total_reward_epi:.3f}")
 
-gamma = 0.99           # factor de descuento
-batch_size = 128
-target_update = 1_000  # cada 1000 episodios copia pesos a la red objetivo
+        # Guardado incremental
+        if episodio % 20000 == 0:
+            torch.save(modelo.state_dict(), archivo_guardado.replace(".pth", f"_{episodio}.pth"))
+            print(f"Guardado checkpoint: {archivo_guardado.replace('.pth', f'_{episodio}.pth')}")
 
-episodes = 500_000
-rewards_log = []
-epsilons = []
+    # Guardar modelo final de la fase
+    torch.save(modelo.state_dict(), archivo_guardado)
+    print(f"\nModelo guardado: {archivo_guardado}\n")
 
-ax2 = ax.twinx()
 
-# ===================== #
-#   BUCLE DE ENTRENOS   #
-# ===================== #
+# ============================================================
+#                        MAIN
+# ============================================================
+if __name__ == "__main__":
 
-for episode in trange(episodes):
-    state = env._state_to_array(env.reset())
-    total_reward = 0.0
-    done = False
+    dispositivo = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Entrenando en:", dispositivo)
 
-    while not done:
-        state_tensor = torch.tensor(
-            state, dtype=torch.float32, device=device
-        ).unsqueeze(0)
+    # Crear carpeta modelos si no existe
+    os.makedirs("models", exist_ok=True)
 
-        # Política ε-greedy
-        if np.random.rand() < epsilon:
-            action = np.random.randint(n_actions)  # 0..n_actions-1
-        else:
-            with torch.no_grad():
-                q_values = model(state_tensor)
-                action = torch.argmax(q_values, dim=1).item()
+    # Crear modelo base
+    modelo = DQN(input_dim=5, output_dim=5).to(dispositivo)  # 5 acciones posibles
 
-        next_state_raw, reward, done, _ = env.step(action)
-        next_state = env._state_to_array(next_state_raw)
+    # ============================================================
+    #                  FASE 1 → SOLO 2 ACCIONES
+    # ============================================================
+    entrenar_fase(
+        nombre_fase="FASE 1 (plantar + pedir)",
+        num_episodios=100000,
+        acciones_disponibles=[0, 1],
+        usar_filtro_acciones=False,      # filtrado no aplica aquí
+        modelo=modelo,
+        dispositivo=dispositivo,
+        archivo_guardado="models/dqn_phase1.pth",
+        archivo_inicial=None,
+    )
 
-        buffer.push(state, action, reward, next_state, done)
-        state = next_state
-        total_reward += reward
+    # ============================================================
+    #                  FASE 2 → TODAS LAS ACCIONES
+    # ============================================================
+    entrenar_fase(
+        nombre_fase="FASE 2 (doblar, dividir, rendirse)",
+        num_episodios=150000,
+        acciones_disponibles=[0, 1, 2, 3, 4],
+        usar_filtro_acciones=True,       # filtrado activado después del comienzo
+        modelo=modelo,
+        dispositivo=dispositivo,
+        archivo_guardado="models/dqn_phase2.pth",
+        archivo_inicial="models/dqn_phase1.pth",
+    )
 
-        # Entrenamiento si el buffer tiene suficientes muestras
-        if len(buffer) >= batch_size:
-            s, a, r, s_next, d = buffer.sample(batch_size)
-
-            s = torch.tensor(s, dtype=torch.float32, device=device)
-            a = torch.tensor(a, dtype=torch.long, device=device)
-            r = torch.tensor(r, dtype=torch.float32, device=device)
-            s_next = torch.tensor(s_next, dtype=torch.float32, device=device)
-            d = torch.tensor(d, dtype=torch.float32, device=device)
-
-            # Q(s, a) actual
-            q_values = model(s).gather(1, a.unsqueeze(1)).squeeze(1)
-
-            # Objetivo: r + γ * max_a' Q_target(s', a')
-            with torch.no_grad():
-                max_next_q = target_model(s_next).max(1)[0]
-                q_target = r + gamma * max_next_q * (1.0 - d)
-
-            loss = criterion(q_values, q_target)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-    rewards_log.append(total_reward)
-    epsilon = max(epsilon_min, epsilon * epsilon_decay)
-    epsilons.append(epsilon)
-
-    # Actualizar red objetivo
-    if episode % target_update == 0:
-        target_model.load_state_dict(model.state_dict())
-
-    # Actualizar gráfica cada 1000 episodios
-    if (episode + 1) % 1000 == 0:
-        avg = np.mean(rewards_log[-100:])
-        avg_rewards.append(avg)
-        eps_to_plot = epsilons[::1000]  # reduce puntos en la gráfica de epsilon
-
-        ax.clear()
-        ax2.clear()
-
-        # Recompensa promedio
-        ax.plot(avg_rewards, label='Promedio recompensa (últimos 100)', color='tab:blue')
-        ax.set_xlabel("Episodios / 1000")
-        ax.set_ylabel("Recompensa promedio", color='tab:blue')
-
-        # Epsilon
-        ax2.plot(eps_to_plot, label='Epsilon', color='tab:orange', alpha=0.7)
-        ax2.set_ylabel("Epsilon", color='tab:orange')
-
-        lines, labels = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines + lines2, labels + labels2, loc='lower right')
-
-        plt.pause(0.001)
-
-# ===================== #
-#   EVALUAR Y GUARDAR   #
-# ===================== #
-
-# Evaluar política final sin exploración
-evaluate_policy(env, model, device, episodes_eval=10000)
-
-# Guardar modelo con nombre único para no sobreescribir
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-model_filename = f"dqn_blackjack_{timestamp}.pth"
-torch.save(model.state_dict(), model_filename)
-print(f"Entrenamiento completado. Modelo guardado en {model_filename}")
+    print("\nEntrenamiento completo terminado.")
