@@ -1,115 +1,90 @@
 import random
 import numpy as np
 
+
 class BlackjackEnv:
     def __init__(self, casino_type=1, cut_card_position=52):
         self.casino_type = casino_type
         self.cut_card_position = cut_card_position
         self.shoe = self._init_shoe()
 
+    # ============================================================
+    # ------------------  UTILIDADES DE CARTAS -------------------
+    # ============================================================
     def _init_shoe(self):
-        # Crea un zapato realista de 6 mazos (312 cartas)
         valores = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
         palos = ["♠", "♥", "♦", "♣"]
         shoe = []
-
-        for _ in range(6):  # 6 mazos
-            for valor in valores:
-                for palo in palos:
-                    shoe.append((valor, palo))
-
+        for _ in range(6):
+            for v in valores:
+                for p in palos:
+                    shoe.append((v, p))
         random.shuffle(shoe)
         return shoe
 
     def _draw_card(self):
         if len(self.shoe) <= self.cut_card_position:
-            print("Se llego al límite del zapato.")
+            print("Carta de corte alcanzada. Nuevo zapato.")
             self.shoe = self._init_shoe()
         return self.shoe.pop()
 
     def _card_value(self, card):
-        valor, palo = card
-        if valor == "A":
+        v, _ = card
+        if v == "A":
             return 1
-        elif valor in ["J", "Q", "K"]:
+        if v in ["J", "Q", "K"]:
             return 10
-        else:
-            return int(valor)
+        return int(v)
 
     def _hand_value(self, hand):
         total = sum(self._card_value(c) for c in hand)
         aces = sum(1 for c in hand if c[0] == "A")
-
         while aces > 0 and total + 10 <= 21:
             total += 10
             aces -= 1
         return total
-    
+
     def _usable_ace(self, hand):
         total = sum(self._card_value(c) for c in hand)
         has_ace = any(c[0] == "A" for c in hand)
-        # CORREGIDO: antes usaba "1 in hand", que siempre daba 0
         return int(has_ace and total + 10 <= 21)
 
-    def _handle_next_hand(self, reward, done):
-        if done and hasattr(self, "hands") and len(self.hands) > 1:
-            self.current_hand_index +=1
+    # ============================================================
+    # ----------- HELPERS PARA MANEJO DE ESTADOS ----------------
+    # ============================================================
+    def _make_safe_state(self, reward):
+        """Devuelve un estado válido + termina episodio con reward dado."""
+        next_state = (
+            self._hand_value(self.player),
+            self.dealer[0],
+            self._usable_ace(self.player),
+            len(self.player),
+            int(self._card_value(self.dealer[0]) in [1, 10]),
+        )
+        self.done = True
+        self.reward = reward
+        return next_state, reward, True, {}
 
-            # Checa si faltan manos por jugar
-            if self.current_hand_index < len(self.hands):
-                self.player = self.hands[self.current_hand_index]
-                done = False
-                reward = 0
-                next_state = (
-                    self._hand_value(self.player),
-                    self.dealer[0],
-                    self._usable_ace(self.player),
-                    len(self.player),
-                    int(self._card_value(self.dealer[0]) in [1, 10])
-                )
-                return next_state, reward, done, {}
+    def _state_to_array(self, state):
+        ps, du, ua, nc, pb = state
 
-            # Si ya se jugaron todas las manos del jugador, continua el dealer
-            while self._hand_value(self.dealer) < 17:
-                self.dealer.append(self._draw_card())
+        if isinstance(du, tuple):
+            du_val = self._card_value(du)
+        else:
+            du_val = du
 
-            total_reward = 0
-            for hand in self.hands:
-                player_sum = self._hand_value(hand)
-                dealer_sum = self._hand_value(self.dealer)
-                if player_sum > 21:
-                    total_reward += -1
-                elif dealer_sum > 21 or player_sum > dealer_sum:
-                    total_reward += 1
-                elif player_sum == dealer_sum:
-                    total_reward += 0
-                else:
-                    total_reward += -1
+        return np.array([
+            ps / 21,
+            du_val / 10,
+            float(ua),
+            nc / 10,
+            float(pb),
+        ], dtype=np.float32)
 
-            reward = total_reward / len(self.hands)
-
-            done = True
-            next_state = (
-                self._hand_value(self.player),
-                self.dealer[0],
-                self._usable_ace(self.player),
-                len(self.player),
-                int(self._card_value(self.dealer[0]) in [1, 10])
-            )
-
-            if hasattr(self, "side_bet_reward"):
-                reward += self.side_bet_reward
-                self.side_bet_reward = 0
-
-            # Fin de la ronda (todas las manos jugadas)
-            self.done = True
-            self.reward = reward
-
-            return next_state, reward, done, {}
-        return None
-
+    # ============================================================
+    # ------------------- BLACKJACK CHECKS -----------------------
+    # ============================================================
     def _is_blackjack(self, hand):
-        # Devuelve true si es un Blackjack natural (A + 10) o (10 + A)
         if len(hand) != 2:
             return False
         v1 = self._card_value(hand[0])
@@ -117,137 +92,138 @@ class BlackjackEnv:
         return (v1 == 1 and v2 == 10) or (v2 == 1 and v1 == 10)
 
     def _calculate_side_bet(self, hand):
-        card_1, card_2 = hand[0], hand[1]
-
-        # Casino 1 (Macao)
+        c1, c2 = hand
         if self.casino_type == 1:
-            total = self._card_value(card_1) + self._card_value(card_2)
+            total = self._card_value(c1) + self._card_value(c2)
             if total == 13:
                 return 10
-            elif total < 13 or total > 13:
-                return 1
-            else:
-                return 0
-        # Casino 2 (Jubilee)
+            return 1
         elif self.casino_type == 2:
-            v1, s1 = card_1
-            v2, s2 = card_2
+            v1, s1 = c1
+            v2, s2 = c2
             if v1 == v2:
-                if s1 == s2:
-                    return 15   # Par perfecto
-                else:
-                    return 10
+                return 15 if s1 == s2 else 10
             return 0
-        else:
-            return 0
+        return 0
 
-    def _state_to_array(self, state):
-        # Transforma los estados del entorno a vectores, para poder usar directamente en pytorch
-        player_sum, dealer_upcard, usable_ace, num_cards, possible_blackjack = state
+    # ============================================================
+    # ---------------- MANEJO DE MULTI-MANOS (SPLITS) ------------
+    # ============================================================
+    def _handle_next_hand(self, reward, done):
+        """Maneja el avance cuando hay splits."""
+        if not (done and hasattr(self, "hands") and len(self.hands) > 1):
+            return None
 
-        if isinstance(dealer_upcard, tuple):
-            dealer_upcard_value = self._card_value(dealer_upcard)
-        else:
-            dealer_upcard_value = dealer_upcard
+        last = len(self.hands) - 1
 
-        # Normalización entre 0 - 1
-        return np.array([
-            player_sum / 21,
-            dealer_upcard_value / 10,
-            float(usable_ace),
-            num_cards / 10,
-            float(possible_blackjack)
-        ], dtype=np.float32)
+        # Aún quedan manos por jugar
+        if self.current_hand_index < last:
+            self.current_hand_index += 1
+            self.player = self.hands[self.current_hand_index]
 
+            next_state = (
+                self._hand_value(self.player),
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self._card_value(self.dealer[0]) in [1, 10]),
+            )
+            return next_state, 0, False, {}
+
+        # Ya se jugaron todas — ahora juega el dealer
+        while self._hand_value(self.dealer) < 17:
+            self.dealer.append(self._draw_card())
+
+        dealer_total = self._hand_value(self.dealer)
+        total_reward = 0
+
+        for hand in self.hands:
+            p = self._hand_value(hand)
+            if p > 21:
+                total_reward += -1
+            elif dealer_total > 21 or p > dealer_total:
+                total_reward += 1
+            elif p == dealer_total:
+                total_reward += 0
+            else:
+                total_reward += -1
+
+        reward = total_reward / len(self.hands)
+
+        self.current_hand_index = last
+        self.player = self.hands[last]
+        self.reward = reward
+        self.done = True
+
+        next_state = (
+            self._hand_value(self.player),
+            self.dealer[0],
+            self._usable_ace(self.player),
+            len(self.player),
+            int(self._card_value(self.dealer[0]) in [1, 10]),
+        )
+        return next_state, reward, True, {}
+
+    # ============================================================
+    # ---------------------- RESET DEL JUEGO ---------------------
+    # ============================================================
     def reset(self, force_new_shoe=False):
         if len(self.shoe) <= self.cut_card_position or force_new_shoe:
             self.shoe = self._init_shoe()
             print("Carta de corte, nuevo zapato a continuación.")
 
-        # Repartir cartas al jugador
         self.player = [self._draw_card(), self._draw_card()]
-        # Repartir cartas al crupier
         self.dealer = [self._draw_card(), self._draw_card()]
 
-        player_sum = self._hand_value(self.player)
-        dealer_upcard = self.dealer[0]
-        player_usable_ace = self._usable_ace(self.player)
-        player_num_cards = len(self.player)
-        # CORREGIDO: usar _card_value para el upcard del dealer
-        possible_blackjack = int(self._card_value(dealer_upcard) in [1, 10])
+        ps = self._hand_value(self.player)
+        du = self.dealer[0]
+        ua = self._usable_ace(self.player)
+        nc = len(self.player)
+        pb = int(self._card_value(du) in [1, 10])
 
-        self.dealer_has_blackjack = False
-        self.player_has_blackjack = False
         self.done = False
         self.reward = 0
         self.hands = [self.player]
         self.current_hand_index = 0
         self.split_count = 0
         self.max_splits = 4
+
         self.side_bet_reward = self._calculate_side_bet(self.player)
 
-        # Checa si el dealer tiene blackjack [A,10]
-        if self._card_value(dealer_upcard) in [1, 10]:
-            if self._hand_value(self.dealer) == 21:
-                self.dealer_has_blackjack = True
-                self.done = True
+        # --- Dealer blackjack ---
+        if self._card_value(du) in [1, 10] and self._hand_value(self.dealer) == 21:
+            self.done = True
+            if self._is_blackjack(self.player):
+                self.reward = 0
+            else:
+                self.reward = -1
+            return ps, du, ua, nc, pb
 
-                if self._is_blackjack(self.player):
-                    self.player_has_blackjack = True
-                    self.reward = 0
-                else:
-                    self.reward = -1
-                return(
-                    player_sum,
-                    dealer_upcard,
-                    player_usable_ace,
-                    player_num_cards,
-                    possible_blackjack
-                )
-        # Si el jugador tiene blackjack natural entonces
+        # --- Player blackjack ---
         if self._is_blackjack(self.player):
-            self.player_has_blackjack = True
             self.done = True
             self.reward = 1.5
-            return(
-                player_sum,
-                dealer_upcard,
-                player_usable_ace,
-                player_num_cards,
-                possible_blackjack
-            )
+            return ps, du, ua, nc, pb
 
-        state = (
-            player_sum,
-            dealer_upcard,
-            player_usable_ace,
-            player_num_cards,
-            possible_blackjack
-        )
-        return state
+        return ps, du, ua, nc, pb
 
+    # ============================================================
+    # ------------------------- STEP -----------------------------
+    # ============================================================
     def step(self, action):
 
-        # Pedir
+        # ----------------------------------------------------------
+        # PEDIR
+        # ----------------------------------------------------------
         if action == 1:
             self.player.append(self._draw_card())
-            player_sum = self._hand_value(self.player)
+            ps = self._hand_value(self.player)
 
-            if player_sum > 21:
-                reward = -1
-                done = True
+            if ps > 21:
+                reward, done = -1, True
             else:
-                reward = 0
-                done = False
-            
-            next_state = (
-                player_sum,
-                self.dealer[0],
-                self._usable_ace(self.player),
-                len(self.player),
-                int(self._card_value(self.dealer[0]) in [1, 10])
-            )
-            
+                reward, done = 0, False
+
             result = self._handle_next_hand(reward, done)
             if result:
                 return result
@@ -256,203 +232,182 @@ class BlackjackEnv:
                 self.done = True
                 self.reward = reward
 
-            return next_state, reward, done, {}
-        # Plantarse
+            return (
+                ps,
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self._card_value(self.dealer[0]) in [1, 10]),
+            ), reward, done, {}
+
+        # ----------------------------------------------------------
+        # PLANTARSE
+        # ----------------------------------------------------------
         elif action == 0:
-            # El dealer reparte sus cartas
             while self._hand_value(self.dealer) < 17:
                 self.dealer.append(self._draw_card())
 
-            player_sum = self._hand_value(self.player)
-            dealer_sum = self._hand_value(self.dealer)
+            ps = self._hand_value(self.player)
+            ds = self._hand_value(self.dealer)
 
-            if dealer_sum > 21 or player_sum > dealer_sum:
-                reward = 1      # Gana el jugador
-            elif player_sum == dealer_sum:
-                reward = 0      # Empate
+            if ds > 21 or ps > ds:
+                reward = 1
+            elif ps == ds:
+                reward = 0
             else:
-                reward = -1     # Pierde el jugador
-            
+                reward = -1
+
             done = True
-            next_state = (
-                player_sum,
-                self.dealer[0],
-                self._usable_ace(self.player),
-                len(self.player),
-                int(self._card_value(self.dealer[0]) in [1, 10])
-            )
 
             result = self._handle_next_hand(reward, done)
             if result:
                 return result
 
-            if done:
-                self.done = True
-                self.reward = reward
+            self.done = True
+            self.reward = reward
 
-            return next_state, reward, done, {}
-        # Doblar
+            return (
+                ps,
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self._card_value(self.dealer[0]) in [1, 10]),
+            ), reward, True, {}
+
+        # ----------------------------------------------------------
+        # DOBLAR
+        # ----------------------------------------------------------
         elif action == 2:
-            if len(self.player) == 2:
-                self.player.append(self._draw_card())
-                player_sum = self._hand_value(self.player)
+            if len(self.player) != 2:
+                print("Acción inválida: no puedes doblar con más de dos cartas.")
+                return self._make_safe_state(-1.0)
 
-                if player_sum > 21:
-                    reward = -2
-                    done = True
-                else:
-                    # El dealer no juega si todavía hay manos jugables (por haber dividido)
-                    # Si sí es la última mano disponible, el dealer juega
-                    if (
-                        not hasattr(self, "hands")
-                        or len(self.hands) == 1
-                        or self.current_hand_index == len(self.hands) -1
-                    ):
-                        while self._hand_value(self.dealer) < 17:
-                            self.dealer.append(self._draw_card())
-                        
-                        dealer_sum = self._hand_value(self.dealer)
-                        if dealer_sum > 21 or player_sum > dealer_sum:
-                            reward = 2
-                        elif player_sum == dealer_sum:
-                            reward = 0
-                        else:
-                            reward = -2
-                        done = True
+            self.player.append(self._draw_card())
+            ps = self._hand_value(self.player)
+
+            if ps > 21:
+                reward, done = -2, True
+            else:
+                # Si es la última mano, el dealer juega
+                if self.current_hand_index == len(self.hands) - 1:
+                    while self._hand_value(self.dealer) < 17:
+                        self.dealer.append(self._draw_card())
+                    ds = self._hand_value(self.dealer)
+
+                    if ds > 21 or ps > ds:
+                        reward = 2
+                    elif ps == ds:
+                        reward = 0
                     else:
-                        # Si no es la última mano por jugar, se pospone el dealer
-                        # y solo se marca la mano como finalizada
-                        done = True
-
-                next_state = (
-                    player_sum,
-                    self.dealer[0],
-                    self._usable_ace(self.player),
-                    len(self.player),
-                    int(self._card_value(self.dealer[0]) in [1, 10])
-                )
-                
-                result = self._handle_next_hand(reward, done)
-                if result:
-                    return result
-
-                if done:
-                    self.done = True
-                    self.reward = reward
-
-                return next_state, reward, done, {}
-            else:
-                # Aquí penaliza si intenta doblar con más de dos cartas
-                safe_state = (
-                    self._hand_value(self.player),
-                    self.dealer[0],
-                    self._usable_ace(self.player),
-                    len(self.player),
-                    int(self._card_value(self.dealer[0]) in [1, 10])
-                )
-                print("Acción inválida, no puedes doblar con más de dos cartas.")
-                return safe_state, -1.0, True, {}
-        # Rendirse
-        elif action == 4:
-            if len(self.player) == 2:
-                player_sum = self._hand_value(self.player)
-                reward = -0.5
-                done = True
-                next_state = (
-                    player_sum,
-                    self.dealer[0],
-                    self._usable_ace(self.player),
-                    len(self.player),
-                    int(self._card_value(self.dealer[0]) in [1, 10])
-                )
-                
-                result = self._handle_next_hand(reward, done)
-                if result:
-                    return result
-
-                if done:
-                    self.done = True
-                    self.reward = reward
-
-                return next_state, reward, done, {}
-            else:
-                # Acción inválida: no puedes rendirte con más de dos cartas
-                safe_state = (
-                    self._hand_value(self.player),
-                    self.dealer[0],
-                    self._usable_ace(self.player),
-                    len(self.player),
-                    int(self._card_value(self.dealer[0]) in [1, 10])
-                )
-                print("Acción inválida: no puedes rendirte después de pedir carta.")
-                return safe_state, -1.0, True, {}
-        # Dividir
-        elif action == 3:
-            if len(self.player) == 2 and self.player[0] == self.player[1]:
-                if self.split_count < self.max_splits:
-                    self.split_count += 1
-                    card_value = self.player[0]
-
-                    hand_1 = [card_value, self._draw_card()]
-                    hand_2 = [card_value, self._draw_card()]
-
-                    # Reemplaza la mano inicial por las dos nuevas
-                    self.hands.pop(self.current_hand_index)
-                    self.hands[self.current_hand_index:self.current_hand_index] = [hand_1, hand_2]
-
-                    self.player = self.hands[self.current_hand_index]
-                    done = False
-                    reward = 0
-                    next_state = (
-                        self._hand_value(self.player),
-                        self.dealer[0],
-                        self._usable_ace(self.player),
-                        len(self.player),
-                        int(self._card_value(self.dealer[0]) in [1, 10]),
-                    )
-                    return next_state, reward, done, {}
+                        reward = -2
                 else:
-                    raise ValueError("Ya no puedes dividir más.")
+                    reward = 0
+
+                done = True
+
+            result = self._handle_next_hand(reward, done)
+            if result:
+                return result
+
+            self.done = True
+            self.reward = reward
+
+            return (
+                ps,
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self._card_value(self.dealer[0]) in [1, 10]),
+            ), reward, True, {}
+
+        # ----------------------------------------------------------
+        # RENDIRSE
+        # ----------------------------------------------------------
+        elif action == 4:
+            if len(self.player) != 2:
+                print("Acción inválida: no puedes rendirte después de pedir carta.")
+                return self._make_safe_state(-1.0)
+
+            ps = self._hand_value(self.player)
+            reward, done = -0.5, True
+
+            result = self._handle_next_hand(reward, done)
+            if result:
+                return result
+
+            self.done = True
+            self.reward = reward
+
+            return (
+                ps,
+                self.dealer[0],
+                self._usable_ace(self.player),
+                len(self.player),
+                int(self._card_value(self.dealer[0]) in [1, 10]),
+            ), reward, True, {}
+
+        # ----------------------------------------------------------
+        # DIVIDIR  (TOTALMENTE CORREGIDO)
+        # ----------------------------------------------------------
+        elif action == 3:
+
+            # Solo se permite dividir pares por VALOR
+            if len(self.player) == 2 and self.player[0][0] == self.player[1][0]:
+
+                if self.split_count >= self.max_splits:
+                    print("Ya no puedes dividir más.")
+                    return self._make_safe_state(-1.0)
+
+                self.split_count += 1
+
+                cA = self.player[0]
+                cB = self.player[1]
+
+                h1 = [cA, self._draw_card()]
+                h2 = [cB, self._draw_card()]
+
+                # Reemplazar mano actual por la primera mitad
+                self.hands[self.current_hand_index] = h1
+                # Insertar la segunda mano justo después
+                self.hands.insert(self.current_hand_index + 1, h2)
+
+                self.player = self.hands[self.current_hand_index]
+
+                reward, done = 0, False
+
+                return (
+                    self._hand_value(self.player),
+                    self.dealer[0],
+                    self._usable_ace(self.player),
+                    len(self.player),
+                    int(self._card_value(self.dealer[0]) in [1, 10]),
+                ), reward, done, {}
+
+            else:
+                print("Acción inválida: solo puedes dividir cuando tienes un par.")
+                return self._make_safe_state(-1.0)
+
         else:
             raise ValueError(
                 "Acción inválida. Acciones válidas: 0=Plantarse, 1=Pedir, 2=Doblar, 3=Dividir, 4=Rendirse."
             )
 
+    # ============================================================
+    # ------------------------- RENDER ----------------------------
+    # ============================================================
     def render(self, reveal_dealer=False):
-        if reveal_dealer or self.done:
+        if reveal_dealer or getattr(self, "done", False):
             print(f"\nDealer: {self.dealer} (suma: {self._hand_value(self.dealer)})")
         else:
             print(f"\nDealer: [{self.dealer[0]}, ?]")
 
-        print(f"\nJugador: {self.player} (suma: {self._hand_value(self.player)})")    
+        print(f"\nJugador: {self.player} (suma: {self._hand_value(self.player)})")
 
-        # Mostrar si hay varias manos
         if hasattr(self, "hands") and len(self.hands) > 1:
             print(f"Mano {self.current_hand_index + 1} de {len(self.hands)}")
 
-        # Mostrar el número de divisiones realizadas
-        if hasattr(self, "split_count") and self.split_count > 0:
+        if getattr(self, "split_count", 0) > 0:
             print(f"Divisiones realizadas: {self.split_count}")
 
-        if self.dealer_has_blackjack and self.player_has_blackjack:
-            print("Ambos tienen Blackjack. Empate.")
-        elif self.dealer_has_blackjack:
-            print("El dealer tiene Blackjack. Suerte en la próxima.")
-        elif self.player_has_blackjack:
-            print("Blackjack paga 3:2. ¡Felicidades!")    
-
-        if reveal_dealer or self.done:
-            player_val = self._hand_value(self.player)
-            dealer_val = self._hand_value(self.dealer)
-            if not (self.dealer_has_blackjack or self.player_has_blackjack):
-                if player_val > 21:
-                    print("\nDemasiadas cartas. El dealer gana.")
-                elif dealer_val > 21:
-                    print("\n¡Buster! El jugador gana.")
-                elif player_val > dealer_val:
-                    print("\n¡Felicidades! El jugador gana.")
-                elif player_val == dealer_val:
-                    print("\nEmpate.")
-                else:
-                    print("\nEl dealer gana. Suerte para la próxima.")
+        if self.done:
             print(f"Recompensa final: {self.reward}")
