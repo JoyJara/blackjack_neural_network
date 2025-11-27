@@ -4,7 +4,7 @@ import torch.optim as optim
 import numpy as np
 import random
 from collections import deque
-from blackjack_env import BlackjackEnv
+from blackjack_env_1 import BlackjackEnv
 import os
 
 

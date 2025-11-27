@@ -116,10 +116,13 @@ class BlackjackEnv:
     def _get_state(self):
         hand = self.hands[self.current]
         ps = self._hand_value(hand.cards)
-        du = self.dealer[0]
+
+        # ✔ Valor numérico de la carta visible del dealer (corregido)
+        du = self._card_value(self.dealer[0])
+
         ua = self._usable_ace(hand.cards)
         nc = len(hand.cards)
-        pb = int(self._card_value(du) in [1, 10])
+        pb = int(du in [1, 10])  # dealer peligroso
 
         return (ps, du, ua, nc, pb)
 
@@ -157,8 +160,6 @@ class BlackjackEnv:
             h.done = True
             h.result = +1.5
             self.done = True
-            if self.verbose:
-                print("Jugador tiene Blackjack.")
             return self._get_state()
 
         # Dealer BJ natural
@@ -166,8 +167,6 @@ class BlackjackEnv:
             h.done = True
             h.result = -1
             self.done = True
-            if self.verbose:
-                print("Dealer tiene Blackjack.")
             return self._get_state()
 
         return self._get_state()
@@ -194,7 +193,7 @@ class BlackjackEnv:
             return self._handle_end_of_hand(-1)
         else:
             if self.verbose:
-                print("Acción inválida. Elige otra acción.")
+                print("Acción inválida. Elige otra.")
             return self._get_state(), 0, False, {}
 
 
@@ -234,15 +233,13 @@ class BlackjackEnv:
         Si el jugador se pasa en la última mano:
         - Dealer NO roba más cartas.
         - Solo revela su carta oculta.
-        - Se asigna reward y termina ronda.
+        - Termina la ronda.
         """
         self.done = True
         self.reward = reward
 
         if self.verbose:
-            print("\nDealer revela su carta oculta (no roba más):")
-            print(f"Dealer: {self.dealer} "
-                  f"(suma: {self._hand_value(self.dealer)})")
+            print(f"Dealer: {self.dealer} (suma: {self._hand_value(self.dealer)})")
 
         return self._get_state(), reward, True, {}
 
@@ -297,7 +294,6 @@ class BlackjackEnv:
             h2.done = True
 
         else:
-            # Split normal
             h1 = Hand([c1])
             h2 = Hand([c2])
             h1.is_split_child = True
@@ -335,11 +331,9 @@ class BlackjackEnv:
             if val > 21:
                 hand.is_busted = True
 
-                # Si es la última mano → dealer NO juega
                 if self.current == len(self.hands) - 1:
                     return self._player_bust_last_hand(-1)
 
-                # Si hay más manos → pasar a la siguiente
                 return self._handle_end_of_hand(-1)
 
             return self._get_state(), 0, False, {}
@@ -388,7 +382,6 @@ class BlackjackEnv:
 
                 return self._handle_end_of_hand(-2)
 
-            # No asignar aún resultado → dealer decide
             hand.done = True
             hand.result = None
 
@@ -423,7 +416,6 @@ class BlackjackEnv:
 
                 return self._get_state(), 0, False, {}
 
-            # Última mano → dealer no juega
             self.done = True
             self.reward = -0.5
             return self._get_state(), -0.5, True, {}
@@ -475,9 +467,9 @@ class BlackjackEnv:
             print(f"Dealer: [{self.dealer[0]}, ?]")
 
         for i, hand in enumerate(self.hands):
-            marker = "<--" if i == self.current and not hand.done and not self.done else ""
+            marcador = "<--" if i == self.current and not hand.done and not self.done else ""
             print(f"Mano {i+1}/{len(self.hands)}: {hand.cards} "
-                  f"(suma: {self._hand_value(hand.cards)}) {marker}")
+                  f"(suma: {self._hand_value(hand.cards)}) {marcador}")
 
         if self.done:
             print(f"Recompensa total: {self.reward}")
